@@ -1,26 +1,288 @@
 import cv2
 import os
 import csv
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 from ast import literal_eval
 #--------------choose your fix_pointer_dir-------------
-#fix_point_dir = "ocr_fix_point_dir"
-fix_point_dir = "smart_fix_point_dir"
-#WEIGHT_DIR = "OCR_WEIGHT"
-WEIGHT_DIR = "SMART_WEIGHT"
+fix_point_dir = "ocr_fix_point_dir"
+#fix_point_dir = "smart_fix_point_dir"
+WEIGHT_DIR = "OCR_WEIGHT"
+#WEIGHT_DIR = "SMART_WEIGHT"
 
 #----create-dir--------
 path = fix_point_dir
 if not os.path.isdir(path):
     os.makedirs(path)
 
-#-----------read every layer answer and analyze and export the excel to parser-----------#
-def read_every_layer_export_txt_weight(layer_weight_dir):
-    pass
-def read_every_layer_export_csv_answer(layer_answer_dir):
-    pass
+#-----------parser_how_many_node_u_need_concate-----------#
+def read_json_export_csv(layer_json_file):
+    try:
+        node_list  = []
+        merge_list = []
+        node_list_attribute  = {}
+        merge_list_attribute = []
+        merge_flag = 0
+        merge_file_count = 0
+        with open(layer_json_file) as f:
+            data = json.load(f)
+        for name in data['config']['layers']:
+            #---next_conv or dense or lstm-----
+            if(merge_flag == 1 and (name['class_name']=="Dense" or name['class_name']=="Conv2D" or name['class_name']=="LSTM")):
+                node_list = []
+                node_list_attribute = {}
 
+            node_list.append(name['class_name'])
+
+            #-----take attribute-------
+            if(name['class_name']=="Conv2D" and name['config']['use_bias']==True):
+                node_list_attribute["use_bias"] = 1
+            else:
+                node_list_attribute["use_bias"] = 0
+            if(name['class_name']=="BatchNormalization"):
+                node_list_attribute["use_batch"] = 1
+            else:
+                node_list_attribute["use_batch"] = 0
+
+
+            if(name['class_name']=="Dense" or name['class_name']=="Conv2D" or name['class_name']=="LSTM"):
+                merge_flag = 1
+                merge_list.append(node_list)
+                merge_list_attribute.append(node_list_attribute)
+        #print("There is your Merge_node_List_Please_Cheack and total number is {}".format(len(merge_list)))
+        #for node in range(len(merge_list)):
+        #    print("{}{}".format(merge_list[node] , merge_list_attribute[node]))
+        merge_file_count = len(merge_list)
+        return merge_list , merge_list_attribute , merge_file_count
+    except:
+        print("open file error please check your path , your json file location is {}".format(layer_json_file))
+
+def find_the_most_bit_present(np_array,bit_number):
+    for i in range(bit_number):
+        sel = np.absolute(np_array) < 2**i
+        if(sel.all()==True):
+            #print("the program detect the best input shift_number is {} !!!!".format(abs(i-(bit_number-1))))
+            return abs(i-(bit_number-1))
+
+    print("Not all element == True keep going !!!")
+    return bit_number-1
+    
+#-----------read every layer answer and analyze and export the excel to parser-----------#
+def read_input_feature_map_export_csv(layer_input_feature_map,bit_number):
+    try:
+        picture_numpy = np.array(read_picture_from_jpg(input_feature_map = layer_input_feature_map , gray_type=True)).astype(np.float)
+        best_input_feature_map = find_the_most_bit_present(np_array=picture_numpy, bit_number=bit_number)
+        if(best_input_feature_map == None):
+            print("FALL check your layer input feature map")
+            return None
+        else:
+            return best_input_feature_map
+    except:
+        print("check your input and your bit_number is correct or not there is your bit_number {} !!!!".format(bit_number))
+        return None
+
+def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_list_attribute,bit_number):
+    file_count_sel = 0
+    this_node_compare = ''
+    pre_node_compare = ''
+    total_layer_weight_list = []
+    for file_number in range(file_length):
+
+        to_do_list = {}
+
+        #----------check this node is major node or not---------
+        if('Conv2D' in merge_list[file_number]):
+            this_node_compare = 'Conv2D'
+        elif('Dense' in merge_list[file_number]):
+            this_node_compare = 'Dense'
+        elif('LSTM' in merge_list[file_number]):
+            this_node_compare = 'LSTM'
+        else:
+            print("error no major node in this merge node please check!!!!!")
+            return None
+
+        #----------if this node is not previous then you need change file count sel to zero--------
+        if(this_node_compare!=pre_node_compare):
+            file_count_sel = 0
+        else:
+            file_count_sel = file_count_sel + 1
+        pre_node_compare = this_node_compare
+
+        #-----------check your node and search your file weight and parse --------------
+        if('Conv2D' in merge_list[file_number] or 'BatchNormalization' in merge_list[file_number]):
+            if(merge_list_attribute[file_number]['use_bias']==0 and merge_list_attribute[file_number]['use_batch']==0):
+                weight = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                weight_bit = find_the_most_bit_present(weight,bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+            elif(merge_list_attribute[file_number]['use_bias']==0 and merge_list_attribute[file_number]['use_batch']==1):
+                weight   = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                gamma    = read_parameter(file_serial="conv2d",file_name="gamma",file_number=file_count_sel)
+                variance = read_parameter(file_serial="conv2d",file_name="variance",file_number=file_count_sel)
+                mean     = read_parameter(file_serial="conv2d",file_name="mean",file_number=file_count_sel)
+                beta     = read_parameter(file_serial="conv2d",file_name="beta",file_number=file_count_sel)
+                weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
+                alpha_bit    = find_the_most_bit_present(gamma/(variance**0.5),bit_number=bit_number)
+                beta_bit     = find_the_most_bit_present(beta-(gamma*mean/(variance**0.5)),bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":alpha_bit,"quant_batch_bias_beta":beta_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+            elif(merge_list_attribute[file_number]['use_bias']==1 and merge_list_attribute[file_number]['use_batch']==0):
+                weight   = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                bias     = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
+                weight_bit  =   find_the_most_bit_present(weight,bit_number=bit_number)
+                bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+            elif(merge_list_attribute[file_number]['use_bias']==1 and merge_list_attribute[file_number]['use_batch']==1):
+                weight   = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                bias     = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
+                gamma    = read_parameter(file_serial="conv2d",file_name="gamma",file_number=file_count_sel)
+                variance = read_parameter(file_serial="conv2d",file_name="variance",file_number=file_count_sel)
+                mean     = read_parameter(file_serial="conv2d",file_name="mean",file_number=file_count_sel)
+                beta     = read_parameter(file_serial="conv2d",file_name="beta",file_number=file_count_sel)
+                weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
+                bias_bit     = find_the_most_bit_present(bias,bit_number=bit_number)
+                alpha_bit    = find_the_most_bit_present(gamma/(variance**0.5),bit_number=bit_number)
+                beta_bit     = find_the_most_bit_present(beta-(gamma*mean/(variance**0.5)),bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":alpha_bit,"quant_batch_bias_beta":beta_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+            else:
+                print("ERROR!!!!!!!!!!!!!! please check read_every_layer_export_txt_weight func ")
+
+        if('Dense' in merge_list[file_number]):
+            if(merge_list_attribute[file_number]['use_bias']==1):
+                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                bias    = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
+                weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
+                bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+            else:
+                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+
+        if('LSTM' in merge_list[file_number]):
+            if(merge_list_attribute[file_number]['use_bias']==1):
+                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                bias    = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
+                weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
+                bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+            else:
+                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+        #---------todo something---------check the weight-----
+        #print(to_do_list)
+        total_layer_weight_list.append(to_do_list)
+        
+        # --------------------- excel format by c++ parser reading --------------------------
+        #merge_node_vector[quant_list_index]->quant_batch                = target_layer_quant_vector[quant_list_index][0];//11
+        #merge_node_vector[quant_list_index]->quant_batch_bias_alpha     = target_layer_quant_vector[quant_list_index][1];//11
+        #merge_node_vector[quant_list_index]->quant_batch_bias_beta      = target_layer_quant_vector[quant_list_index][2];//11
+        #merge_node_vector[quant_list_index]->quant_finish               = target_layer_quant_vector[quant_list_index][3];//0
+        #merge_node_vector[quant_list_index]->quant_obuf                 = target_layer_quant_vector[quant_list_index][4];//0 11
+        #merge_node_vector[quant_list_index]->quant_word_size            = target_layer_quant_vector[quant_list_index][5];//0
+        #merge_node_vector[quant_list_index]->pooling_quant_finish       = target_layer_quant_vector[quant_list_index][6];//0
+    return total_layer_weight_list
+
+
+def read_every_layer_csv_answer(layer_answer_dir,file_length,merge_list,bit_number):
+    file_count_sel = 0
+    this_node_compare = ''
+    pre_node_compare = ''
+    choose_dir_path = ''
+    total_layer_answer_list = []
+    for file_number in range(file_length):
+
+        reader = []
+
+        #----------check this node is major node or not---------
+        if('Conv2D' in merge_list[file_number]):
+            this_node_compare = 'Conv2D'
+        elif('Dense' in merge_list[file_number]):
+            this_node_compare = 'Dense'
+        elif('LSTM' in merge_list[file_number]):
+            this_node_compare = 'LSTM'
+        else:
+            print("error no major node in this merge node please check!!!!!")
+            return None
+        #----------if this node is not previous then you need change file count sel to zero--------
+        if(this_node_compare!=pre_node_compare):
+            file_count_sel = 0
+        else:
+            file_count_sel = file_count_sel + 1
+        pre_node_compare = this_node_compare
+
+        if('Conv2D' in merge_list[file_number]):
+            choose_dir_path = layer_answer_dir + "/" + "conv2d" + "_" + str(file_count_sel)
+        elif('Dense' in merge_list[file_number]):
+            choose_dir_path = layer_answer_dir + "/" + "dense" + "_" + str(file_count_sel)
+        elif('LSTM' in merge_list[file_number]):
+            choose_dir_path = layer_answer_dir + "/" + "lstm" + "_" + str(file_count_sel)
+        else:
+            print("Sorry we cannot support this merge node please check !!!!!")
+
+        #---------------------dfs all the file and compare the data ----------------
+        for filename in os.listdir(choose_dir_path):
+            if(not os.path.isdir(filename)):
+                with open(os.path.join(choose_dir_path,filename),'r') as f:
+                    reader_tmp = list(csv.reader(f,delimiter=','))
+                reader.append(reader_tmp)
+        reader = np.array(reader,dtype=float)
+        reader_bit = find_the_most_bit_present(reader,bit_number=bit_number)
+        total_layer_answer_list.append(reader_bit)
+    return total_layer_answer_list
+
+def export_parser_design_csv(json_file_location,input_feature_map_location,weight_location,answer_location,bit_number):
+    merge_list , merge_list_attribute , merge_file_count= read_json_export_csv(layer_json_file=json_file_location)
+    input_feature_shift = read_input_feature_map_export_csv(layer_input_feature_map=input_feature_map_location,bit_number=bit_number)
+    total_layer_weight_list = read_every_layer_txt_weight(layer_weight_dir=weight_location,file_length=merge_file_count,merge_list=merge_list,merge_list_attribute=merge_list_attribute,bit_number=bit_number)
+    total_layer_answer_list = read_every_layer_csv_answer(layer_answer_dir=answer_location,file_length=merge_file_count,merge_list=merge_list,bit_number=bit_number)
+    print(total_layer_answer_list)
+    
+    for file_number in range(merge_file_count):
+        now_position   = file_number
+        next_position  = file_number + 1
+        pre_position   = file_number - 1
+        final_position = merge_file_count - 1
+
+        #----------------check if this node is the first node in there, we need to alignment to input_feature_map------------
+        if(now_position==0):
+            total_layer_weight_list[now_position]['quant_batch_bias_beta'] = input_feature_shift
+        else:
+            if(total_layer_weight_list[pre_position]['pooling_quant_finish']!=0):
+                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta'] - total_layer_weight_list[pre_position]['pooling_quant_finish']
+            elif(total_layer_weight_list[pre_position]['quant_finish']!=0):
+                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta'] - total_layer_weight_list[pre_position]['quant_finish']
+            else:
+                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta']
+        
+        #----------------check if this node is the last node --------------
+        if(now_position != final_position):
+            if('MaxPooling2D' in merge_list[now_position]):
+                total_layer_weight_list[now_position]['pooling_quant_finish'] = total_layer_weight_list[now_position]['quant_batch_bias_beta'] - total_layer_answer_list[now_position]
+            else:
+                total_layer_weight_list[now_position]['quant_finish'] = total_layer_weight_list[now_position]['quant_batch_bias_beta'] - total_layer_answer_list[now_position]
+            #print(total_layer_answer_list[now_position])
+    
+    count_number = 0
+    fp = open("./"+fix_point_dir+"/"+"SMART_testing.csv",'w')
+    for file_number in range(merge_file_count):
+        print("layers_{},".format(str(file_number)),end='',file=fp)
+        for node in range(len(merge_list[file_number])):
+            if(node!=len(merge_list[file_number])-1):
+                print("{},".format(count_number),end='',file=fp)
+            else:
+                print("{}".format(count_number),file=fp)
+            count_number = count_number + 1
+        print("quant_{},{},{},{},{},{},{},{}".format(str(file_number),
+                                                    total_layer_weight_list[file_number]['quant_batch'],
+                                                    total_layer_weight_list[file_number]['quant_batch_bias_alpha'],
+                                                    total_layer_weight_list[file_number]['quant_batch_bias_beta'],
+                                                    total_layer_weight_list[file_number]['quant_finish'],
+                                                    total_layer_weight_list[file_number]['quant_obuf'],
+                                                    total_layer_weight_list[file_number]['quant_word_size'],
+                                                    total_layer_weight_list[file_number]['pooling_quant_finish']),file=fp)
+    fp.close()
+        
 def split_list(l, n):
     # 將list分割 (l:list, n:每個matrix裡面有n個元素)
     for idx in range(0, len(l), n):
@@ -52,6 +314,7 @@ def read_picture_from_jpg(input_feature_map,gray_type=False):
             with open(input_feature_map,'r') as f:
                 reader_0 = list(csv.reader(f,delimiter=','))
             reader.append(reader_0)
+            
         except:
             print("read gray picture error!!")    
     elif(gray_type==False):
@@ -65,11 +328,9 @@ def read_picture_from_jpg(input_feature_map,gray_type=False):
             print(reader.shape)
             reader = reader/256
             reader = reader.tolist()
-            print(type(reader))
         except:
-            print("read normal picture error!!")    
+            print("read normal picture error!!")
     return reader
-
 def read_input_feature_map_csv_file(csv_file_location1,csv_file_location2,csv_file_location3):
     try:
         reader = []
@@ -95,7 +356,7 @@ def read_parameter(file_serial,file_name,file_number):
         print("please check your "+str(file_name)+" name or weight location")
     else:
         para_vector = np.array(para_vector,dtype=float)
-        print("{} file is open and read".format(str(file_name)))
+        #print("{} file is open and read".format(str(file_name)))
     return para_vector
 
 def Saturation(input_value,word_size):
@@ -697,7 +958,7 @@ def LSTM(fixed_layer,float_layer,file_number,units,xt_shape,ht_shape,dir_choose)
                 input_xt = np.dot(float_layer[cell],lstm_xh_weight)
                 input_ht_1 = np.dot(ht_1,lstm_ht_weight)
                 input_value = input_xt + input_ht_1
-                np.savetxt("./lstm_connect_answer_without_activatefunc/"+str(cell)+".csv",input_value,delimiter=",")
+                #np.savetxt("./lstm_connect_answer_without_activatefunc/"+str(cell)+".csv",input_value,delimiter=",")
                 ft = sigmoid(input_value[:,128:256]+bias_f)
                 #print("ft shape is {}".format(ft.shape))
                 #ft = hard_sigmoid(input_value[:,128:256]+bias_f,0)
