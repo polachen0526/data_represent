@@ -6,10 +6,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from ast import literal_eval
 #--------------choose your fix_pointer_dir-------------
+testing_file = "OCR_testing.csv"
 fix_point_dir = "ocr_fix_point_dir"
-#fix_point_dir = "smart_fix_point_dir"
 WEIGHT_DIR = "OCR_WEIGHT"
+
+#testing_file = "SMART_testing.csv"
+#fix_point_dir = "smart_fix_point_dir"
 #WEIGHT_DIR = "SMART_WEIGHT"
+
+
 
 #----create-dir--------
 path = fix_point_dir
@@ -18,47 +23,94 @@ if not os.path.isdir(path):
 
 #-----------parser_how_many_node_u_need_concate-----------#
 def read_json_export_csv(layer_json_file):
+    '''
     try:
-        node_list  = []
-        merge_list = []
-        node_list_attribute  = {}
-        merge_list_attribute = []
-        merge_flag = 0
-        merge_file_count = 0
-        with open(layer_json_file) as f:
-            data = json.load(f)
-        for name in data['config']['layers']:
-            #---next_conv or dense or lstm-----
-            if(merge_flag == 1 and (name['class_name']=="Dense" or name['class_name']=="Conv2D" or name['class_name']=="LSTM")):
-                node_list = []
-                node_list_attribute = {}
+    '''
+    node_list  = []
+    merge_list = []
+    node_list_attribute  = {"use_bias":0,"use_batch":0,"branch_node":None}
+    node_list_attribute["Conv2D_attribute"] = (None,None,None,None)
+    node_list_attribute["MaxPooling2D_attribute"] = (None,(None,None),(None,None))
+    node_list_attribute["output_channel_attribute"] = None
+    node_list_attribute["LeakyReLU_attribute"] = (None,None)
+    node_list_attribute["BatchNormalization_attribute"] = (None,None,None,None)
+    merge_list_attribute = []
+    merge_flag = 0
+    merge_file_count = 0
+    output_filters = 0
+    input_filters = 0
+    kernel_size = 0
+    branch_node = None
+    with open(layer_json_file) as f:
+        data = json.load(f)
+    for name in data['config']['layers']:
+        #---next_conv or dense or lstm-----
+        if(merge_flag == 1 and (name['class_name']=="Dense" or name['class_name']=="Conv2D" or name['class_name']=="LSTM")):
+            node_list = []
+            node_list_attribute  = {"use_bias":0,"use_batch":0,"branch_node":None}
+            node_list_attribute["Conv2D_attribute"] = (None,None,None,None)
+            node_list_attribute["MaxPooling2D_attribute"] = (None,(None,None),(None,None))
+            node_list_attribute["BatchNormalization_attribute"] = (None,None,None,None)
+            node_list_attribute["output_channel_attribute"] = None
+            node_list_attribute["LeakyReLU_attribute"] = (None,None)
+            input_filters = output_filters
+            output_filters = 0
+            kernel_size = 0
+        node_list.append(name['class_name'])
 
-            node_list.append(name['class_name'])
-
-            #-----take attribute-------
-            if(name['class_name']=="Conv2D" and name['config']['use_bias']==True):
+        #-----take attribute-------
+        if(name['class_name']=="InputLayer"):
+            input_filters = name['config']['batch_input_shape'][-1]
+        elif(name['class_name']=="Conv2D"):
+            #check use bias or not
+            if(name['config']['use_bias']==True):
                 node_list_attribute["use_bias"] = 1
             else:
                 node_list_attribute["use_bias"] = 0
-            if(name['class_name']=="BatchNormalization"):
-                node_list_attribute["use_batch"] = 1
-            else:
-                node_list_attribute["use_batch"] = 0
+                
+            output_filters = name['config']['filters']
+            kernel_size = name['config']['kernel_size'][0]
+            node_list_attribute["output_channel_attribute"] = output_filters
+            node_list_attribute["Conv2D_attribute"] = ("conv",name['config']['kernel_size'][0],name['config']['strides'][0],name['config']['strides'][1])
+        elif(name['class_name']=="Dense" or name['class_name']=="LSTM"):
+            output_filters = name['config']['units']
+            node_list_attribute["output_channel_attribute"] = output_filters
+        elif(name['class_name']=="MaxPooling2D"):
+            node_list_attribute["MaxPooling2D_attribute"] = ("max_pool",(name['config']['pool_size'][0],name['config']['pool_size'][1]),(name['config']['strides'][0],name['config']['strides'][1]))
+        elif(name['class_name']=="LeakyReLU"):
+            node_list_attribute["LeakyReLU_attribute"] = ("Leakyrelu",name['config']['alpha'])
+        elif(name['class_name']=="BatchNormalization"):
+            node_list_attribute["use_batch"] = 1
+        
+        if(node_list_attribute["use_bias"]==True and node_list_attribute["use_batch"]==False):
+            node_list_attribute["BatchNormalization_attribute"] = ("batch",len(merge_list)-1,("weight",output_filters,input_filters,kernel_size**2),("bias"))
+        elif(node_list_attribute["use_bias"]==False and node_list_attribute["use_batch"]==True):
+            node_list_attribute["BatchNormalization_attribute"] = ("batch",len(merge_list)-1,("weight",output_filters,input_filters,kernel_size**2),("gamma"),("variance"),("mean"),("beta"))
+        elif(node_list_attribute["use_bias"]==False and node_list_attribute["use_batch"]==False):
+            pass 
+        else:
+            print("our hw cannot support use bias and batch in the same time please fix your training !!!!!")
 
-
-            if(name['class_name']=="Dense" or name['class_name']=="Conv2D" or name['class_name']=="LSTM"):
-                merge_flag = 1
-                merge_list.append(node_list)
-                merge_list_attribute.append(node_list_attribute)
-        #print("There is your Merge_node_List_Please_Cheack and total number is {}".format(len(merge_list)))
-        #for node in range(len(merge_list)):
-        #    print("{}{}".format(merge_list[node] , merge_list_attribute[node]))
-        merge_file_count = len(merge_list)
-        return merge_list , merge_list_attribute , merge_file_count
+        if(name['class_name']=="Dense" or name['class_name']=="Conv2D" or name['class_name']=="LSTM"):
+            merge_flag = 1
+            merge_list.append(node_list)
+            merge_list_attribute.append(node_list_attribute)
+    print("There is your Merge_node_List_Please_Cheack and total number is {}".format(len(merge_list)))
+    for node in range(len(merge_list)):
+        print("{}\n{}".format(merge_list[node] , merge_list_attribute[node]))
+    merge_file_count = len(merge_list)
+    return merge_list , merge_list_attribute , merge_file_count
+    '''
     except:
         print("open file error please check your path , your json file location is {}".format(layer_json_file))
+    '''
 
-def find_the_most_bit_present(np_array,bit_number):
+def find_the_most_bit_present(np_array,bit_number,alpha=False):
+    '''
+    if(alpha == True):
+        diff = np.where(np_array>2**6)
+        np_array = np.delete(arr=np_array, obj=diff)
+    '''
     for i in range(bit_number):
         sel = np.absolute(np_array) < 2**i
         if(sel.all()==True):
@@ -67,7 +119,7 @@ def find_the_most_bit_present(np_array,bit_number):
 
     print("Not all element == True keep going !!!")
     return bit_number-1
-    
+
 #-----------read every layer answer and analyze and export the excel to parser-----------#
 def read_input_feature_map_export_csv(layer_input_feature_map,bit_number):
     try:
@@ -114,7 +166,7 @@ def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_li
             if(merge_list_attribute[file_number]['use_bias']==0 and merge_list_attribute[file_number]['use_batch']==0):
                 weight = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
                 weight_bit = find_the_most_bit_present(weight,bit_number=bit_number)
-                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             elif(merge_list_attribute[file_number]['use_bias']==0 and merge_list_attribute[file_number]['use_batch']==1):
                 weight   = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
                 gamma    = read_parameter(file_serial="conv2d",file_name="gamma",file_number=file_count_sel)
@@ -122,15 +174,17 @@ def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_li
                 mean     = read_parameter(file_serial="conv2d",file_name="mean",file_number=file_count_sel)
                 beta     = read_parameter(file_serial="conv2d",file_name="beta",file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
-                alpha_bit    = find_the_most_bit_present(gamma/(variance**0.5),bit_number=bit_number)
+                alpha_bit    = find_the_most_bit_present(gamma/(variance**0.5),bit_number=bit_number,alpha=True)
+                #print(gamma/(variance**0.5))
                 beta_bit     = find_the_most_bit_present(beta-(gamma*mean/(variance**0.5)),bit_number=bit_number)
+                #print(beta-(gamma*mean/(variance**0.5)))
                 to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":alpha_bit,"quant_batch_bias_beta":beta_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             elif(merge_list_attribute[file_number]['use_bias']==1 and merge_list_attribute[file_number]['use_batch']==0):
                 weight   = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
                 bias     = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
                 weight_bit  =   find_the_most_bit_present(weight,bit_number=bit_number)
                 bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
-                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             elif(merge_list_attribute[file_number]['use_bias']==1 and merge_list_attribute[file_number]['use_batch']==1):
                 weight   = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
                 bias     = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
@@ -140,7 +194,7 @@ def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_li
                 beta     = read_parameter(file_serial="conv2d",file_name="beta",file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
                 bias_bit     = find_the_most_bit_present(bias,bit_number=bit_number)
-                alpha_bit    = find_the_most_bit_present(gamma/(variance**0.5),bit_number=bit_number)
+                alpha_bit    = find_the_most_bit_present(gamma/(variance**0.5),bit_number=bit_number,alpha=True)
                 beta_bit     = find_the_most_bit_present(beta-(gamma*mean/(variance**0.5)),bit_number=bit_number)
                 to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":alpha_bit,"quant_batch_bias_beta":beta_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             else:
@@ -152,11 +206,11 @@ def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_li
                 bias    = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
                 bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
-                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             else:
                 weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
-                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
 
         if('LSTM' in merge_list[file_number]):
             if(merge_list_attribute[file_number]['use_bias']==1):
@@ -164,16 +218,16 @@ def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_li
                 bias    = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
                 bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
-                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             else:
                 weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
-                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":weight_bit,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
+                to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
         #---------todo something---------check the weight-----
-        #print(to_do_list)
+        print(to_do_list)
         total_layer_weight_list.append(to_do_list)
         
-        # --------------------- excel format by c++ parser reading --------------------------
+        # --------------------- excel format by c++ parser reading dont open just show!!!!!--------------------------
         #merge_node_vector[quant_list_index]->quant_batch                = target_layer_quant_vector[quant_list_index][0];//11
         #merge_node_vector[quant_list_index]->quant_batch_bias_alpha     = target_layer_quant_vector[quant_list_index][1];//11
         #merge_node_vector[quant_list_index]->quant_batch_bias_beta      = target_layer_quant_vector[quant_list_index][2];//11
@@ -186,6 +240,9 @@ def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_li
 
 def read_every_layer_csv_answer(layer_answer_dir,file_length,merge_list,bit_number):
     file_count_sel = 0
+    max_pool_file_count_sel = 0
+    batch_normalization_file_count_sel = 0
+    lambda_file_count_sel = 0
     this_node_compare = ''
     pre_node_compare = ''
     choose_dir_path = ''
@@ -207,12 +264,29 @@ def read_every_layer_csv_answer(layer_answer_dir,file_length,merge_list,bit_numb
         #----------if this node is not previous then you need change file count sel to zero--------
         if(this_node_compare!=pre_node_compare):
             file_count_sel = 0
-        else:
-            file_count_sel = file_count_sel + 1
-        pre_node_compare = this_node_compare
+            max_pool_file_count_sel = 0
+            batch_normalization_file_count_sel = 0
+            lambda_file_count_sel = 0
+            leaky_file_count_sel = 0
 
-        if('Conv2D' in merge_list[file_number]):
+        if('Conv2D' in merge_list[file_number] and "BatchNormalization" in merge_list[file_number]):
+            choose_dir_path = layer_answer_dir + "/" + "batch_normalization" + "_" + str(batch_normalization_file_count_sel)
+        elif('Conv2D' in merge_list[file_number] and "BatchNormalization" not in merge_list[file_number]):
             choose_dir_path = layer_answer_dir + "/" + "conv2d" + "_" + str(file_count_sel)
+            '''
+            if(merge_list[file_number][-1]=="MaxPooling2D"):
+                choose_dir_path = layer_answer_dir + "/" + "max_pooling2d" + "_" + str(max_pool_file_count_sel)
+            elif(merge_list[file_number][-1]=="BatchNormalization"):
+                choose_dir_path = layer_answer_dir + "/" + "batch_normalization" + "_" + str(batch_normalization_file_count_sel)
+            elif(merge_list[file_number][-1]=="Conv2D"):
+                choose_dir_path = layer_answer_dir + "/" + "conv2d" + "_" + str(file_count_sel)
+            elif(merge_list[file_number][-1]=="Lambda"):
+                choose_dir_path = layer_answer_dir + "/" + "lambda" + "_" + str(lambda_file_count_sel)
+            elif(merge_list[file_number][-1]=="LeakyReLU"):
+                choose_dir_path = layer_answer_dir + "/" + "leaky_re_lu" + "_" + str(leaky_file_count_sel)
+            else:
+                print("error choose node or not add in this choose check!!!!!!")
+            '''
         elif('Dense' in merge_list[file_number]):
             choose_dir_path = layer_answer_dir + "/" + "dense" + "_" + str(file_count_sel)
         elif('LSTM' in merge_list[file_number]):
@@ -220,22 +294,36 @@ def read_every_layer_csv_answer(layer_answer_dir,file_length,merge_list,bit_numb
         else:
             print("Sorry we cannot support this merge node please check !!!!!")
 
+        if("BatchNormalization" in merge_list[file_number]):
+            file_count_sel = file_count_sel + 1
+            batch_normalization_file_count_sel = batch_normalization_file_count_sel + 1
+        elif("Conv2D" in merge_list[file_number] or "Dense" in merge_list[file_number][-1] or "LSTM" in merge_list[file_number][-1]):
+            file_count_sel = file_count_sel + 1
+        else:
+            print(merge_list[file_number][-1])
+            print("error choose node or not add in this choose check!!!!!!")
+        pre_node_compare = this_node_compare
         #---------------------dfs all the file and compare the data ----------------
+        print(choose_dir_path)
         for filename in os.listdir(choose_dir_path):
             if(not os.path.isdir(filename)):
                 with open(os.path.join(choose_dir_path,filename),'r') as f:
                     reader_tmp = list(csv.reader(f,delimiter=','))
                 reader.append(reader_tmp)
         reader = np.array(reader,dtype=float)
-        reader_bit = find_the_most_bit_present(reader,bit_number=bit_number)
+        reader_bit = find_the_most_bit_present(reader,bit_number=bit_number)-1
         total_layer_answer_list.append(reader_bit)
     return total_layer_answer_list
 
-def export_parser_design_csv(json_file_location,input_feature_map_location,weight_location,answer_location,bit_number):
+def export_parser_design_csv(json_file_location,input_feature_map_location,weight_location,answer_location,bit_number,gray_type=False):
     merge_list , merge_list_attribute , merge_file_count= read_json_export_csv(layer_json_file=json_file_location)
     input_feature_shift = read_input_feature_map_export_csv(layer_input_feature_map=input_feature_map_location,bit_number=bit_number)
     total_layer_weight_list = read_every_layer_txt_weight(layer_weight_dir=weight_location,file_length=merge_file_count,merge_list=merge_list,merge_list_attribute=merge_list_attribute,bit_number=bit_number)
     total_layer_answer_list = read_every_layer_csv_answer(layer_answer_dir=answer_location,file_length=merge_file_count,merge_list=merge_list,bit_number=bit_number)
+    #print(merge_list)
+    #print(merge_file_count)
+    #print(merge_list_attribute)
+    print("input_feature_shift is {input_feature_shift}".format(input_feature_shift=input_feature_shift))
     print(total_layer_answer_list)
     
     for file_number in range(merge_file_count):
@@ -262,9 +350,9 @@ def export_parser_design_csv(json_file_location,input_feature_map_location,weigh
             else:
                 total_layer_weight_list[now_position]['quant_finish'] = total_layer_weight_list[now_position]['quant_batch_bias_beta'] - total_layer_answer_list[now_position]
             #print(total_layer_answer_list[now_position])
-    
+    #print(total_layer_weight_list)
     count_number = 0
-    fp = open("./"+fix_point_dir+"/"+"SMART_testing.csv",'w')
+    fp = open("./"+fix_point_dir+"/"+testing_file,'w')
     for file_number in range(merge_file_count):
         print("layers_{},".format(str(file_number)),end='',file=fp)
         for node in range(len(merge_list[file_number])):
@@ -282,6 +370,83 @@ def export_parser_design_csv(json_file_location,input_feature_map_location,weigh
                                                     total_layer_weight_list[file_number]['quant_word_size'],
                                                     total_layer_weight_list[file_number]['pooling_quant_finish']),file=fp)
     fp.close()
+    print("----------------------------------------------------------------------------------------------------")
+    floating_answer_list    = []
+    fixed_answer_list       = []
+    floating_node_list      = []
+    fixed_node_list         = []
+    for layer_number in range(merge_file_count):
+        reader = {}
+        if(layer_number == 0): 
+            try:
+                reader["floating_answer"] = np.load("OCR_floating_answer/floating_answer"+str(layer_number)+".npy")
+                reader["fixed_answer"]    = np.load("OCR_fixed_answer/fixed_answer"+str(layer_number)+".npy")
+                floating_answer_list.append(reader["floating_answer"])
+                fixed_answer_list.append(reader["fixed_answer"])        
+                continue
+            except:
+                reader["floating_answer"] =  read_picture_from_jpg(input_feature_map=input_feature_map_location,gray_type=gray_type)
+                reader["fixed_answer"]    =  np.array([0])
+            finally:
+                TODO_LIST = TODO_LIST_mission(merge_list=merge_list, layer_number=layer_number)
+                print(TODO_LIST)
+        else:
+            try:
+                reader["floating_answer"] = np.load("OCR_floating_answer/floating_answer"+str(layer_number)+".npy")
+                reader["fixed_answer"]    = np.load("OCR_fixed_answer/fixed_answer"+str(layer_number)+".npy")
+                floating_answer_list.append(reader["floating_answer"])
+                fixed_answer_list.append(reader["fixed_answer"])      
+                continue
+            except:
+                reader["floating_answer"] =  floating_answer_list[layer_number-1]
+                reader["fixed_answer"]    =  fixed_answer_list[layer_number-1]
+            finally:
+                TODO_LIST = TODO_LIST_mission(merge_list=merge_list, layer_number=layer_number)
+                print(TODO_LIST)
+        
+        floating_answer , fixed_answer , float_node , fixed_node = layer_information(TODO_List=TODO_LIST,
+                                                                                     layer_number="layer"+str(layer_number+1),
+                                                                                     input_feature_map_array=reader,
+                                                                                     conv=merge_list_attribute[layer_number]['Conv2D_attribute'],
+                                                                                     max_pool=merge_list_attribute[layer_number]['MaxPooling2D_attribute'],
+                                                                                     relu=merge_list_attribute[layer_number]['LeakyReLU_attribute'],
+                                                                                     batch=merge_list_attribute[layer_number]['BatchNormalization_attribute'],
+                                                                                     output_channel=merge_list_attribute[layer_number]['output_channel_attribute'],
+                                                                                     branch_node=merge_list_attribute[layer_number]['branch_node']
+                                                                                     )
+        floating_answer_list.append(floating_answer)
+        fixed_answer_list.append(fixed_answer)
+        floating_node_list.append(float_node)
+        fixed_node_list.append(fixed_node)
+        np.save('OCR_floating_answer/floating_answer'+str(layer_number), floating_answer)
+        np.save('OCR_fixed_answer/fixed_answer'+str(layer_number), fixed_answer)
+        print("----------------------------------------------------------------------------------------------------")
+        
+        
+def TODO_LIST_mission(merge_list,layer_number):
+    TODO_LIST = []
+    for node in merge_list[layer_number]:
+        if(node == "InputLayer"):
+            pass
+        elif(node == "Conv2D"):
+            TODO_LIST.append("conv")
+        elif(node == "BatchNormalization"):
+            TODO_LIST.append("batch")
+        elif(node == "LeakyReLU"):
+            TODO_LIST.append("Leakyrelu")
+        elif(node == "ReLU"):
+            TODO_LIST.append("relu")
+        elif(node=="MaxPooling2D"):
+            TODO_LIST.append("max_pool")
+        elif(node=="Lambda"):
+            TODO_LIST.append("lambda")
+        elif(node=="LSTM"):
+            TODO_LIST.append("lstm")
+        elif(node=="Dense"):
+            TODO_LIST.append("dense")
+        else:
+            print("please check the node in your mission!!!!! this node class is {name}".format(name=node))
+    return TODO_LIST
         
 def split_list(l, n):
     # 將list分割 (l:list, n:每個matrix裡面有n個元素)
@@ -529,11 +694,11 @@ def Leakyrelu(input_feature_map,leakyrelu,fixed_point):
         leakyrelu = np.array(leakyrelu * 2**fixed_point).astype("int64")
         relu_input_feature_map = np.zeros_like(input_feature_map).astype("int64")
         for i in range(len(input_feature_map)):
-            relu_input_feature_map[i] = (input_feature_map[i] * leakyrelu / 2**fixed_point).astype("int64")
+            relu_input_feature_map[i] = (np.maximum(input_feature_map[i]*leakyrelu,input_feature_map[i]) / 2**fixed_point).astype("int64")
     else:
         relu_input_feature_map = np.zeros_like(input_feature_map)
         for i in range(len(input_feature_map)):
-            relu_input_feature_map[i] = (input_feature_map[i] * leakyrelu)
+            relu_input_feature_map[i] = (np.maximum(input_feature_map[i]*leakyrelu,input_feature_map[i]))
             
     return relu_input_feature_map
 
