@@ -34,6 +34,9 @@ def read_json_export_csv(layer_json_file):
     node_list_attribute["output_channel_attribute"] = None
     node_list_attribute["LeakyReLU_attribute"] = (None,None)
     node_list_attribute["BatchNormalization_attribute"] = (None,None,None,None)
+    node_list_attribute["lambda_attribute"]=(None,None)
+    node_list_attribute["rnn_attribute"]=(None,None,(None,None),(None,None),None)
+    node_list_attribute["dense_attribute"]=(None,None,(None,None),(None,None),None)
     merge_list_attribute = []
     merge_flag = 0
     merge_file_count = 0
@@ -53,6 +56,9 @@ def read_json_export_csv(layer_json_file):
             node_list_attribute["BatchNormalization_attribute"] = (None,None,None,None)
             node_list_attribute["output_channel_attribute"] = None
             node_list_attribute["LeakyReLU_attribute"] = (None,None)
+            node_list_attribute["lambda_attribute"]=(None,None)
+            node_list_attribute["rnn_attribute"]=(None,None,(None,None),(None,None),None)
+            node_list_attribute["dense_attribute"]=(None,None,(None,None),(None,None),None)
             input_filters = output_filters
             output_filters = 0
             kernel_size = 0
@@ -71,25 +77,58 @@ def read_json_export_csv(layer_json_file):
             output_filters = name['config']['filters']
             kernel_size = name['config']['kernel_size'][0]
             node_list_attribute["output_channel_attribute"] = output_filters
-            node_list_attribute["Conv2D_attribute"] = ("conv",name['config']['kernel_size'][0],name['config']['strides'][0],name['config']['strides'][1])
-        elif(name['class_name']=="Dense" or name['class_name']=="LSTM"):
+            padding_size = 0
+            if(name['config']['padding']=="same"):
+                padding_size = 1
+            else:
+                padding_size = 0
+            node_list_attribute["Conv2D_attribute"] = ("conv",name['config']['kernel_size'][0],name['config']['strides'][0],padding_size)
+        elif(name['class_name']=="Dense"):
+            if(name['config']['use_bias']==True):
+                node_list_attribute["use_bias"] = 1
+            else:
+                node_list_attribute["use_bias"] = 0
             output_filters = name['config']['units']
             node_list_attribute["output_channel_attribute"] = output_filters
+            dense_file_number = 0
+            if(not name['config']['name'].split("_")[-1].isdigit()):
+                dense_file_number = 0
+            else:
+                dense_file_number = name['config']['name'].split("_")[-1]
+            node_list_attribute["dense_attribute"] = ("dense",dense_file_number,name['config']['units'],(input_filters,output_filters),(1,output_filters))
         elif(name['class_name']=="MaxPooling2D"):
             node_list_attribute["MaxPooling2D_attribute"] = ("max_pool",(name['config']['pool_size'][0],name['config']['pool_size'][1]),(name['config']['strides'][0],name['config']['strides'][1]))
         elif(name['class_name']=="LeakyReLU"):
             node_list_attribute["LeakyReLU_attribute"] = ("Leakyrelu",name['config']['alpha'])
         elif(name['class_name']=="BatchNormalization"):
             node_list_attribute["use_batch"] = 1
+        elif(name['class_name']=="Lambda"):
+            node_list_attribute["lambda_attribute"]=("squeeze",1)
+        elif(name['class_name']=="LSTM"):
+            if(name['config']['use_bias']==True):
+                node_list_attribute["use_bias"] = 1
+            else:
+                node_list_attribute["use_bias"] = 0
+            output_filters = name['config']['units']
+            node_list_attribute["output_channel_attribute"] = output_filters
+            lstm_file_number = 0
+            if(not name['config']['name'].split("_")[-1].isdigit()):
+                lstm_file_number = 0
+            else:
+                lstm_file_number = name['config']['name'].split("_")[-1]
+            node_list_attribute["rnn_attribute"]=('lstm',lstm_file_number,name['config']['units'],(input_filters,name['config']['units']*4),(name['config']['units'],name['config']['units']*4))
         
-        if(node_list_attribute["use_bias"]==True and node_list_attribute["use_batch"]==False):
+        if(node_list_attribute["use_bias"]==True and node_list_attribute["use_batch"]==False and not (name['class_name']=="Dense" or name['class_name']=="LSTM")):
             node_list_attribute["BatchNormalization_attribute"] = ("batch",len(merge_list)-1,("weight",output_filters,input_filters,kernel_size**2),("bias"))
-        elif(node_list_attribute["use_bias"]==False and node_list_attribute["use_batch"]==True):
+        elif(node_list_attribute["use_bias"]==False and node_list_attribute["use_batch"]==True and not (name['class_name']=="Dense" or name['class_name']=="LSTM")):
             node_list_attribute["BatchNormalization_attribute"] = ("batch",len(merge_list)-1,("weight",output_filters,input_filters,kernel_size**2),("gamma"),("variance"),("mean"),("beta"))
         elif(node_list_attribute["use_bias"]==False and node_list_attribute["use_batch"]==False):
             pass 
         else:
-            print("our hw cannot support use bias and batch in the same time please fix your training !!!!!")
+            if(name['class_name']=="Dense" or name['class_name']=="LSTM"):
+                pass
+            else:
+                print("our hw cannot support use bias and batch in the same time please fix your training !!!!!")
 
         if(name['class_name']=="Dense" or name['class_name']=="Conv2D" or name['class_name']=="LSTM"):
             merge_flag = 1
@@ -202,25 +241,26 @@ def read_every_layer_txt_weight(layer_weight_dir,file_length,merge_list,merge_li
 
         if('Dense' in merge_list[file_number]):
             if(merge_list_attribute[file_number]['use_bias']==1):
-                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
-                bias    = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
+                weight  = read_parameter(file_serial="dense", file_name="weight", file_number=file_count_sel)
+                bias    = read_parameter(file_serial="dense", file_name="bias"  , file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
                 bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
                 to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             else:
-                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                weight  = read_parameter(file_serial="dense", file_name="weight", file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
                 to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
 
         if('LSTM' in merge_list[file_number]):
             if(merge_list_attribute[file_number]['use_bias']==1):
-                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
-                bias    = read_parameter(file_serial="conv2d", file_name="bias"  , file_number=file_count_sel)
-                weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
-                bias_bit    =   find_the_most_bit_present(bias,bit_number=bit_number)
+                f_x    = read_parameter(file_serial="lstm", file_name="f_x"   , file_number=file_count_sel)
+                f_h    = read_parameter(file_serial="lstm", file_name="f_h"   , file_number=file_count_sel)
+                bias   = read_parameter(file_serial="lstm", file_name="f_bias", file_number=file_count_sel)
+                weight_bit  = find_the_most_bit_present(f_x,bit_number=bit_number)
+                bias_bit    = find_the_most_bit_present(bias,bit_number=bit_number)
                 to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":bias_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
             else:
-                weight  = read_parameter(file_serial="conv2d", file_name="weight", file_number=file_count_sel)
+                weight  = read_parameter(file_serial="lstm", file_name="f_x", file_number=file_count_sel)
                 weight_bit   = find_the_most_bit_present(weight,bit_number=bit_number)
                 to_do_list = {"quant_batch":weight_bit,"quant_batch_bias_alpha":14,"quant_batch_bias_beta":weight_bit,"quant_finish":0,"quant_obuf":weight_bit,"quant_word_size":0,"pooling_quant_finish":0}
         #---------todo something---------check the weight-----
@@ -412,7 +452,11 @@ def export_parser_design_csv(json_file_location,input_feature_map_location,weigh
                                                                                      relu=merge_list_attribute[layer_number]['LeakyReLU_attribute'],
                                                                                      batch=merge_list_attribute[layer_number]['BatchNormalization_attribute'],
                                                                                      output_channel=merge_list_attribute[layer_number]['output_channel_attribute'],
-                                                                                     branch_node=merge_list_attribute[layer_number]['branch_node']
+                                                                                     branch_node=merge_list_attribute[layer_number]['branch_node'],
+                                                                                     lambda_func=merge_list_attribute[layer_number]['lambda_attribute'],
+                                                                                     rnn=merge_list_attribute[layer_number]['rnn_attribute'],
+                                                                                     fully_connect=merge_list_attribute[layer_number]['dense_attribute'],
+                                                                                     bit_number=bit_number
                                                                                      )
         floating_answer_list.append(floating_answer)
         fixed_answer_list.append(fixed_answer)
@@ -691,10 +735,13 @@ def Batch_Normalization(input_feature_map,alpha_array,beta_array,fixed_point):
 
 def Leakyrelu(input_feature_map,leakyrelu,fixed_point):
     if(fixed_point!=0):
-        leakyrelu = np.array(leakyrelu * 2**fixed_point).astype("int64")
+        leakyrelu_fixed = np.array(leakyrelu * 2**fixed_point).astype("int64")
         relu_input_feature_map = np.zeros_like(input_feature_map).astype("int64")
-        for i in range(len(input_feature_map)):
-            relu_input_feature_map[i] = (np.maximum(input_feature_map[i]*leakyrelu,input_feature_map[i]) / 2**fixed_point).astype("int64")
+        #for i in range(len(input_feature_map)):
+            #relu_input_feature_map[i] = np.maximum(input_feature_map[i]*leakyrelu_fixed,input_feature_map[i])
+            #relu_input_feature_map[i] = (relu_input_feature_map[i]/ 2**fixed_point).astype("int64")
+            #print(relu_input_feature_map[i])
+        relu_input_feature_map = (np.maximum(input_feature_map*leakyrelu_fixed / 2**fixed_point,input_feature_map)).astype("int64")
     else:
         relu_input_feature_map = np.zeros_like(input_feature_map)
         for i in range(len(input_feature_map)):
@@ -708,19 +755,21 @@ def nrelu(input_feature_map,fixed_point):
         relu_input_feature_map[i] = np.maximum(input_feature_map[i],0) 
     return relu_input_feature_map
     
-def layer_information(TODO_List,layer_number,input_feature_map_array,conv,max_pool,relu,batch,output_channel,branch_node):
+def layer_information(TODO_List,layer_number,input_feature_map_array,conv,max_pool,relu,batch,output_channel,branch_node,lambda_func,rnn,fully_connect,bit_number):
     # parser the information and init
     conv_en     ,conv_kernel        ,conv_stride   ,padding_size         = func_parameter_parser_conv(conv)
     max_pool_en ,max_pool_kernel    ,max_pool_stride                     = func_parameter_parser_max_pool(max_pool)
     relu_en     ,relu_value                                              = func_parameter_parser_relu(relu)
     batch_en    ,weight_array    ,alpha   ,beta  ,bias_array             = func_parameter_parser_batch(batch)
+    lstm_en , lstm_file_number , lstm_unit , lstm_total_bias , lstm_xh_weight , lstm_ht_weight = func_parameter_parser_rnn(rnn)
+    dense_en , dense_file_number , dense_units , dense_weight , dense_bias     = func_parameter_parser_dense(fully_connect)
     mse_array = []
     next_layer_array = []
     fixed_branch_node_array = []
     float_branch_node_array = []
 
     # find the best point location in each location
-    for number in range(2):
+    for number in range(bit_number):
         print("##########  layer_" + str(number)+"  ##########")
         # choose the pre_layer_input
         if(number==0):
@@ -779,6 +828,12 @@ def layer_information(TODO_List,layer_number,input_feature_map_array,conv,max_po
                         np.savetxt("./"+fix_point_dir+"/"+str(layer_number)+"_maxpool_floating_answer/"+str(number)+"_"+str(i)+"_"+str(mission)+"_number.csv",result_array[i]/2**number,delimiter=",")
                 else:
                     np.savetxt("./"+fix_point_dir+"/"+str(layer_number)+'_'+str(number)+"_"+str(mission)+"_number.csv",result_array[0]/2**number,delimiter=",")
+            elif(lambda_func[0]=="squeeze" and mission=="lambda"):
+                result_array = squeeze(input_feature_map=result_array,dim=lambda_func[-1])
+            elif(lstm_en and mission=="lstm"):
+                result_array = LSTM(input_feature_map=input_feature_map,fixed_number=number,units=lstm_unit , lstm_total_bias=lstm_total_bias , lstm_xh_weight=lstm_xh_weight , lstm_ht_weight=lstm_ht_weight , dir_choose=lstm_file_number)
+            elif(dense_en and mission=='dense'):
+                result_array = Dense(input_feature_map=input_feature_map,dense_file_number=dense_file_number,units=dense_units,dense_bias=dense_bias,dense_weight=dense_weight,fixed_number=number)
             else:
                 print("you got some error at TODO_List and your mission is {}".format(mission))
 
@@ -892,7 +947,42 @@ def func_parameter_parser_batch(para):#en,batchnumber,file_number,weight,bias,ga
     else:
         print("you dont use func_parameter_parser_batch func!!!")
         return None,None,None,None,0
-        
+
+def func_parameter_parser_rnn(para):
+    #node_list_attribute["rnn_attribute"]=('lstm',lstm_file_number,unit,(input_filters,name['config']['units']*4),(name['config']['units'],name['config']['units']*4))
+    if(para[0]=='lstm'):
+        lstm_en          = 1
+        lstm_file_number = para[1]
+        unit             = para[2]
+        xt_shape         = para[3]
+        ht_shape         = para[4]
+        lstm_total_bias = read_parameter(file_serial="lstm",file_name="f_bias",file_number=lstm_file_number)
+        print("open lstm bias ready!!!")
+        lstm_xh_weight  = read_parameter(file_serial="lstm",file_name="f_x",file_number=lstm_file_number).reshape(xt_shape[0],xt_shape[1])#512,512
+        print("open lstm xh_weight ready!!!")
+        lstm_ht_weight  = read_parameter(file_serial="lstm",file_name="f_h",file_number=lstm_file_number).reshape(ht_shape[0],ht_shape[1])#128,512
+        print("open lstm ht_weight ready!!!")
+        return lstm_en , lstm_file_number , unit , lstm_total_bias , lstm_xh_weight , lstm_ht_weight
+    else:
+        return None , None , None , None , None , None 
+
+def func_parameter_parser_dense(para):
+    #node_list_attribute["dense_attribute"] = ("dense",dense_file_number,name['config']['units'],(input_filters,output_filters),(1,output_filters))
+    if(para[0]=='dense'):
+        dense_en            = 1
+        dense_file_number   = para[1]
+        units               = para[2]
+        weight_shape        = para[3]
+        bias_shape          = para[4]
+        dense_weight = read_parameter(file_serial="dense",file_name="weight",file_number=dense_file_number).reshape(weight_shape[0],weight_shape[1])
+        print("open dense weight ready !!!")
+        dense_bias   = read_parameter(file_serial="dense",file_name="bias",file_number=dense_file_number).reshape(bias_shape[0],bias_shape[1])
+        print("open dense bias ready !!!")
+        return dense_en , dense_file_number , units , dense_weight , dense_bias
+    else:
+        return None , None , None , None , None
+
+
 def concatenate(pre_layer,late_layer):
 
     #conbine two layer
@@ -915,46 +1005,38 @@ def Flatten(float_layer):
                 flatten_data.append(float_layer[deep][y_size][x_size])
     return np.array(flatten_data)
 
-def Dense(float_layer,fixed_layer,file_number,units,weight_shape,bias_shape,relu_type):
-    
+def Dense(input_feature_map , dense_file_number , units , dense_weight , dense_bias , fixed_number):
+
+    file_number = dense_file_number
+
     try:
         os.stat("./"+fix_point_dir+"/dense_answer_"+str(file_number))
     except:
         os.mkdir("./"+fix_point_dir+"/dense_answer_"+str(file_number))
         
     #fully connect layer
-    dense_weight = read_parameter(file_serial="dense",file_name="weight",file_number=file_number)
-    dense_bias   = read_parameter(file_serial="dense",file_name="bias",file_number=file_number)
     mse_array    = []
     fixed_array  = []
-    float_result = np.zeros([float_layer.shape[0],units])
-    fixed_result = np.zeros([fixed_layer.shape[0],units])
-    #reshape your weight from txt
-    dense_weight = dense_weight.reshape(weight_shape[0],weight_shape[1])
-    dense_bias = dense_bias.reshape(bias_shape[0],bias_shape[1])
-    for number in range(2):
-        if(number==0):
-            float_result = np.dot(float_layer,dense_weight) + dense_bias
-            if(relu_type=="relu"):
-                float_result = nrelu(input_feature_map = float_result, fixed_point = number)
-            else:
-                pass
-            np.savetxt("./"+fix_point_dir+"/dense_answer_"+str(file_number)+"/float_answer.csv",float_result,delimiter=",")
-        else:
-            shift_layer        = (fixed_layer*2**number).astype("int64")
-            shift_dense_weight = (dense_weight*2**number).astype("int64")
-            shift_bias         = (dense_bias*2**number).astype("int64")
-            fixed_result       = np.dot(shift_layer,shift_dense_weight)/2**number + shift_bias
-            if(relu_type=="relu"):
-                fixed_result = nrelu(input_feature_map = fixed_result, fixed_point = number)
-            else:
-                pass
-            np.savetxt("./"+fix_point_dir+"/dense_answer_"+str(file_number)+"/fixed_answer.csv",fixed_result,delimiter=",")
-            fixed_array.append(fixed_result)
-            mse_array.append(np.square(float_result - (fixed_result/2**number).astype("int64")).mean())
-    print("the list of mse_array is {}".format(mse_array))
-    print("the most value in mse_array is {}".format(min(mse_array)))
-    print("the most value in mse_array index is << {}".format(mse_array.index(min(mse_array))+1))
+    #float_result = np.zeros([input_feature_map.shape[0],units])
+    #fixed_result = np.zeros([input_feature_map.shape[0],units])
+    finally_result = np.zeros([input_feature_map.shape[0],units])
+
+    #for number in range(2):
+    if(fixed_number==0):
+        finally_result = np.dot(input_feature_map,dense_weight) + dense_bias
+        np.savetxt("./"+fix_point_dir+"/dense_answer_"+str(file_number)+"/float_answer.csv",finally_result,delimiter=",")
+        
+    else:
+        shift_layer        = (input_feature_map*2**fixed_number).astype("int64")
+        shift_dense_weight = (dense_weight*2**fixed_number).astype("int64")
+        shift_bias         = (dense_bias*2**fixed_number).astype("int64")
+        finally_result     = np.dot(shift_layer,shift_dense_weight)/2**fixed_number + shift_bias
+        np.savetxt("./"+fix_point_dir+"/dense_answer_"+str(file_number)+"/fixed_answer.csv",finally_result,delimiter=",")
+        #fixed_array.append(fixed_result)
+        #mse_array.append(np.square(float_result - (fixed_result/2**number).astype("int64")).mean())
+    #print("the list of mse_array is {}".format(mse_array))
+    #print("the most value in mse_array is {}".format(min(mse_array)))
+    #print("the most value in mse_array index is << {}".format(mse_array.index(min(mse_array))+1))
     '''    
     for i in range(len(dense_result)):
         fp = open("./fix_point_dir/dense_floating_answer/"+str(i)+"_number.csv",'w')
@@ -964,12 +1046,12 @@ def Dense(float_layer,fixed_layer,file_number,units,weight_shape,bias_shape,relu
             else:
                 print(dense_result[i][j],file=fp)    
     '''
-    return np.array(float_result) , np.array(fixed_array[mse_array.index(min(mse_array))])/2**(mse_array.index(min(mse_array))+1)
+    return np.array(finally_result)
     
-def squeeze(layer,dim):
+def squeeze(input_feature_map,dim):
     
     #squeeze the first dim
-    squeeze_layer = np.squeeze(layer,axis=dim)
+    squeeze_layer = np.squeeze(input_feature_map,axis=dim)
     result_array = np.zeros_like(squeeze_layer).T
     try:
         os.stat("./"+fix_point_dir+"/squeeze_floating_answer")
@@ -1045,17 +1127,18 @@ def softmax(x):
     y = np.exp(x)/np.sum(np.exp(x))
     return y
 
-def LSTM(fixed_layer,float_layer,file_number,units,xt_shape,ht_shape,dir_choose):
+def LSTM(input_feature_map , fixed_number , units , lstm_total_bias , lstm_xh_weight , lstm_ht_weight , dir_choose):
     
     #LSTM CELL ULP TEST
-    lstm_total_bias = read_parameter(file_serial="lstm",file_name="f_bias",file_number=file_number)
+    #lstm_total_bias = read_parameter(file_serial="lstm",file_name="f_bias",file_number=file_number)
+    #lstm_xh_weight = read_parameter(file_serial="lstm",file_name="f_x",file_number=file_number).reshape(lstm_xh_weight.shape[0],lstm_xh_weight.shape[1])#512,512
+    #lstm_ht_weight = read_parameter(file_serial="lstm",file_name="f_h",file_number=file_number).reshape(lstm_ht_weight.shape[0],lstm_ht_weight.shape[1])#128,512
+    file_number = dir_choose
     bias_i = lstm_total_bias[:128].T
     bias_f = lstm_total_bias[128:256].T
     bias_C = lstm_total_bias[256:384].T
     bias_O = lstm_total_bias[384:].T
     
-    lstm_xh_weight = read_parameter(file_serial="lstm",file_name="f_x",file_number=file_number).reshape(xt_shape[0],xt_shape[1])#512,512
-    lstm_ht_weight = read_parameter(file_serial="lstm",file_name="f_h",file_number=file_number).reshape(ht_shape[0],ht_shape[1])#128,512
     mse_array = []
     next_layer_array = []
     try:
@@ -1067,144 +1150,143 @@ def LSTM(fixed_layer,float_layer,file_number,units,xt_shape,ht_shape,dir_choose)
     except:
         os.mkdir("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer")
         
-    float_array = []
-    for layer_number in range(2):
-        fixed_array = []
-        ct_1 = np.zeros([1,units])
-        ht_1 = np.zeros([1,units])
-        #print("float_layer_shape is {}".format(float_layer.shape))
-        #print("fixed_layer_shape is {}".format(fixed_layer.shape))
-        for cell in range(float_layer.shape[0]):
-            if(layer_number==0):
-                i_round = int((xt_shape[0]+ht_shape[0]) / 8);
-                for i in range(i_round):
-                    try:
-                        os.stat("./sw_answer_dir_"+str(dir_choose)+"/cell_"+str(cell))
-                    except:
-                        os.mkdir("./sw_answer_dir_"+str(dir_choose)+"/cell_"+str(cell))
-                    file_name ="./sw_answer_dir_"+str(dir_choose)+"/cell_"+str(cell)+"/" + str(i) + "_float_8_input_weight_output.txt"
-                    with open(file_name,'w') as f:
-                        x_begin = i * 8;
-                        x_end = i * 8 + 8; 
-                        print("-------input--------",file=f)
-                        if(i<int(xt_shape[0]/8)):
-                            print(float_layer[cell][i*8:i*8+8],file=f)
-                        else:
-                            i_index = i - int(xt_shape[0]/8)
-                            print(ht_1[0][i_index*8:i_index*8+8],file=f)
-                        for y in range(xt_shape[0]):
-                            print("------lstm_xt_weight--------",file=f)
-                            print(lstm_xh_weight[y][x_begin:x_end],file=f)
-                        for z in range(ht_shape[0]):
-                            print("------lstm_ht_weight--------",file=f)
-                            print(lstm_ht_weight[z][x_begin:x_end],file=f)
-                            print("--------------",file=f)
+    #float_array = []
+    #fixed_array = []
+    result_array = []
+    ct_1 = np.zeros([1,units])
+    ht_1 = np.zeros([1,units])
+    #print("input_feature_map_shape is {}".format(input_feature_map.shape))
+    #print("input_feature_map_shape is {}".format(input_feature_map.shape))
+    for cell in range(input_feature_map.shape[0]):
+        if(fixed_number==0):
+            i_round = int((lstm_xh_weight.shape[0]+lstm_ht_weight.shape[0]) / 8);
+            for i in range(i_round):
                 try:
-                    os.stat("./sw_answer_dir_dot1x1_"+str(dir_choose)+"/cell_"+str(cell))
+                    os.stat("./sw_answer_dir_"+str(dir_choose)+"/cell_"+str(cell))
                 except:
-                    os.mkdir("./sw_answer_dir_dot1x1_"+str(dir_choose)+"/cell_"+str(cell))
-                for i in range(int(xt_shape[1])):
-                    tmp_total = 0;
-                    file_name_dot = "./sw_answer_dir_dot1x1_"+str(dir_choose)+"/cell_"+str(cell)+"/"+str(i) + "_dot.txt"
-                    with open(file_name_dot,'w') as d:
-                        for j in range(int(xt_shape[0])):
-                            tmp = float_layer[cell][j] * lstm_xh_weight[j][i]
-                            print(tmp,file=d);
-                            tmp_total = tmp_total + tmp
-                        for j in range(int(ht_shape[0])):
-                            tmp = ht_1[0][j] * lstm_ht_weight[j][i]
-                            print(tmp,file=d);
-                            tmp_total = tmp_total + tmp
-                        print("--------total_answer----------",file=d)
-                        print(tmp_total,file=d)
-
-
-                        
-                input_xt = np.dot(float_layer[cell],lstm_xh_weight)
-                input_ht_1 = np.dot(ht_1,lstm_ht_weight)
-                input_value = input_xt + input_ht_1
-                #np.savetxt("./lstm_connect_answer_without_activatefunc/"+str(cell)+".csv",input_value,delimiter=",")
-                ft = sigmoid(input_value[:,128:256]+bias_f)
-                #print("ft shape is {}".format(ft.shape))
-                #ft = hard_sigmoid(input_value[:,128:256]+bias_f,0)
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ft_number.csv",ft,delimiter=",")
-                it = sigmoid(input_value[:,:128]+bias_i)
-                #print("it shape is {}".format(it.shape))
-                #it = hard_sigmoid(input_value[:,:128]+bias_i,0)
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_it_number.csv",it,delimiter=",")
-                ct = tanh(input_value[:,256:384]+bias_C)
-                #print("ct shape is {}".format(ct.shape))
-                #ct = hard_tanh(input_value[:,256:384]+bias_C,0)
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ct_pre_number.csv",ct,delimiter=",")
-                ct = ft*ct_1+it*ct
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ct_aft_number.csv",ct,delimiter=",")
-                ot = sigmoid(input_value[:,384:]+bias_O)
-                #print("ot shape is {}".format(ot.shape))
-                #ot = hard_sigmoid(input_value[:,384:]+bias_O,0)
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ot_number.csv",ot,delimiter=",")
-                ht = ot * tanh(ct)
-                #print("ht shape is {}".format(ht.shape))
-                #ht = ot * hard_tanh(ct,0)
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ht_number.csv",ht,delimiter=",")
-                ht_1 = ht
-                ct_1 = ct
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_number.csv",ht,delimiter=",")
-                float_array.append(ht.reshape(units))
-                #if(cell==30):
-                #    print(ct)
-                #    print("---------------------")
-                #    print(ht)
-            elif(layer_number!=0):
-                shift_lstm_xh_weight = (lstm_xh_weight * 2 **layer_number).astype("int64")
-                shift_lstm_ht_weight = (lstm_ht_weight * 2 **layer_number).astype("int64")
-                shift_layer          = (fixed_layer  * 2 **layer_number).astype("int64")
-                shift_bias_i         = (bias_i * 2 **layer_number).astype("int64")
-                shift_bias_f         = (bias_f * 2 **layer_number).astype("int64")
-                shift_bias_C         = (bias_C * 2 **layer_number).astype("int64")
-                shift_bias_O         = (bias_O * 2 **layer_number).astype("int64")
-                
-                input_xt = (np.dot(shift_layer[cell],shift_lstm_xh_weight)/2**layer_number)#.astype("int64")
-                input_ht_1 = (np.dot(ht_1,shift_lstm_ht_weight)/2**layer_number)#.astype("int64")
-                input_value = (input_xt + input_ht_1) #2
-                ft = ((fixed_sigmoid_lookuptable(input_value[:,128:256]+shift_bias_f,layer_number)))
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(layer_number)+"_"+str(cell)+"_ft_number.csv",ft,delimiter=",")
-                it = ((fixed_sigmoid_lookuptable(input_value[:,:128]+shift_bias_i,layer_number)))
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(layer_number)+"_"+str(cell)+"_it_number.csv",it,delimiter=",")
-                ct = ((fixed_tanh_lookuptable(input_value[:,256:384]+shift_bias_C,layer_number)))
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(layer_number)+"_"+str(cell)+"_ct_pre_number.csv",ct,delimiter=",")
-                ct = (((ft*ct_1)+(it*ct)))#.astype("int64")#2
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(layer_number)+"_"+str(cell)+"_ct_aft_number.csv",ct,delimiter=",")
-                ot = ((fixed_sigmoid_lookuptable(input_value[:,384:]+shift_bias_O,layer_number)))
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(layer_number)+"_"+str(cell)+"_ot_number.csv",ot,delimiter=",")
-                ht = ((ot * fixed_tanh_lookuptable(ct,layer_number)))
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(layer_number)+"_"+str(cell)+"_ht_number.csv",ot,delimiter=",")
-                ht_1 = ht
-                '''
-                print("----------------xt---------------- {}".format(layer_number))
-                if(input_xt.any()==0):
-                    print("what_the_fuck")
-                else:
-                    print(input_xt)
-                print("----------------ht---------------- {}".format(layer_number))
-                if(input_ht_1.any()==0):
-                    print("what_the_fuck")
-                else:
-                    print(input_ht_1)
-                '''
-                #print("----------------ft---------------- {}".format(layer_number))
-                #print(ht)
-                ct_1 = ct
-                np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(layer_number)+"_"+str(cell)+"_number.csv",ht,delimiter=",")
-                fixed_array.append(ht.reshape(units))
+                    os.mkdir("./sw_answer_dir_"+str(dir_choose)+"/cell_"+str(cell))
+                file_name ="./sw_answer_dir_"+str(dir_choose)+"/cell_"+str(cell)+"/" + str(i) + "_float_8_input_weight_output.txt"
+                with open(file_name,'w') as f:
+                    x_begin = i * 8;
+                    x_end = i * 8 + 8; 
+                    print("-------input--------",file=f)
+                    if(i<int(lstm_xh_weight.shape[0]/8)):
+                        print(input_feature_map[cell][i*8:i*8+8],file=f)
+                    else:
+                        i_index = i - int(lstm_xh_weight.shape[0]/8)
+                        print(ht_1[0][i_index*8:i_index*8+8],file=f)
+                    for y in range(lstm_xh_weight.shape[0]):
+                        print("------lstm_xt_weight--------",file=f)
+                        print(lstm_xh_weight[y][x_begin:x_end],file=f)
+                    for z in range(lstm_ht_weight.shape[0]):
+                        print("------lstm_ht_weight--------",file=f)
+                        print(lstm_ht_weight[z][x_begin:x_end],file=f)
+                        print("--------------",file=f)
+            try:
+                os.stat("./sw_answer_dir_dot1x1_"+str(dir_choose)+"/cell_"+str(cell))
+            except:
+                os.mkdir("./sw_answer_dir_dot1x1_"+str(dir_choose)+"/cell_"+str(cell))
+            for i in range(int(lstm_xh_weight.shape[1])):
+                tmp_total = 0;
+                file_name_dot = "./sw_answer_dir_dot1x1_"+str(dir_choose)+"/cell_"+str(cell)+"/"+str(i) + "_dot.txt"
+                with open(file_name_dot,'w') as d:
+                    for j in range(int(lstm_xh_weight.shape[0])):
+                        tmp = input_feature_map[cell][j] * lstm_xh_weight[j][i]
+                        print(tmp,file=d);
+                        tmp_total = tmp_total + tmp
+                    for j in range(int(lstm_ht_weight.shape[0])):
+                        tmp = ht_1[0][j] * lstm_ht_weight[j][i]
+                        print(tmp,file=d);
+                        tmp_total = tmp_total + tmp
+                    print("--------total_answer----------",file=d)
+                    print(tmp_total,file=d)
+                    
+            input_xt = np.dot(input_feature_map[cell],lstm_xh_weight)
+            input_ht_1 = np.dot(ht_1,lstm_ht_weight)
+            input_value = input_xt + input_ht_1
+            #np.savetxt("./lstm_connect_answer_without_activatefunc/"+str(cell)+".csv",input_value,delimiter=",")
+            ft = sigmoid(input_value[:,128:256]+bias_f)
+            #print("ft shape is {}".format(ft.shape))
+            #ft = hard_sigmoid(input_value[:,128:256]+bias_f,0)
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ft_number.csv",ft,delimiter=",")
+            it = sigmoid(input_value[:,:128]+bias_i)
+            #print("it shape is {}".format(it.shape))
+            #it = hard_sigmoid(input_value[:,:128]+bias_i,0)
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_it_number.csv",it,delimiter=",")
+            ct = tanh(input_value[:,256:384]+bias_C)
+            #print("ct shape is {}".format(ct.shape))
+            #ct = hard_tanh(input_value[:,256:384]+bias_C,0)
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ct_pre_number.csv",ct,delimiter=",")
+            ct = ft*ct_1+it*ct
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ct_aft_number.csv",ct,delimiter=",")
+            ot = sigmoid(input_value[:,384:]+bias_O)
+            #print("ot shape is {}".format(ot.shape))
+            #ot = hard_sigmoid(input_value[:,384:]+bias_O,0)
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ot_number.csv",ot,delimiter=",")
+            ht = ot * tanh(ct)
+            #print("ht shape is {}".format(ht.shape))
+            #ht = ot * hard_tanh(ct,0)
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_ht_number.csv",ht,delimiter=",")
+            ht_1 = ht
+            ct_1 = ct
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_floating_answer/"+str(cell)+"_number.csv",ht,delimiter=",")
+            result_array.append(ht.reshape(units))
+            #if(cell==30):
+            #    print(ct)
+            #    print("---------------------")
+            #    print(ht)
+        elif(fixed_number!=0):
+            shift_lstm_xh_weight = (lstm_xh_weight * 2 **fixed_number).astype("int64")
+            shift_lstm_ht_weight = (lstm_ht_weight * 2 **fixed_number).astype("int64")
+            shift_layer          = (input_feature_map  * 2 **fixed_number).astype("int64")
+            shift_bias_i         = (bias_i * 2 **fixed_number).astype("int64")
+            shift_bias_f         = (bias_f * 2 **fixed_number).astype("int64")
+            shift_bias_C         = (bias_C * 2 **fixed_number).astype("int64")
+            shift_bias_O         = (bias_O * 2 **fixed_number).astype("int64")
+            
+            input_xt = (np.dot(shift_layer[cell],shift_lstm_xh_weight)/2**fixed_number)#.astype("int64")
+            input_ht_1 = (np.dot(ht_1,shift_lstm_ht_weight)/2**fixed_number)#.astype("int64")
+            input_value = (input_xt + input_ht_1) #2
+            ft = ((fixed_sigmoid_lookuptable(input_value[:,128:256]+shift_bias_f,fixed_number)))
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(fixed_number)+"_"+str(cell)+"_ft_number.csv",ft,delimiter=",")
+            it = ((fixed_sigmoid_lookuptable(input_value[:,:128]+shift_bias_i,fixed_number)))
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(fixed_number)+"_"+str(cell)+"_it_number.csv",it,delimiter=",")
+            ct = ((fixed_tanh_lookuptable(input_value[:,256:384]+shift_bias_C,fixed_number)))
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(fixed_number)+"_"+str(cell)+"_ct_pre_number.csv",ct,delimiter=",")
+            ct = (((ft*ct_1)+(it*ct)))#.astype("int64")#2
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(fixed_number)+"_"+str(cell)+"_ct_aft_number.csv",ct,delimiter=",")
+            ot = ((fixed_sigmoid_lookuptable(input_value[:,384:]+shift_bias_O,fixed_number)))
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(fixed_number)+"_"+str(cell)+"_ot_number.csv",ot,delimiter=",")
+            ht = ((ot * fixed_tanh_lookuptable(ct,fixed_number)))
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(fixed_number)+"_"+str(cell)+"_ht_number.csv",ot,delimiter=",")
+            ht_1 = ht
+            '''
+            print("----------------xt---------------- {}".format(fixed_number))
+            if(input_xt.any()==0):
+                print("what_the_fuck")
             else:
-                print("please check your code why your going here !!!!!!")
-        #mse_array to find best fixed point location
-        if(layer_number!=0):
-            mse_array.append(np.square(np.array(float_array) - np.array(fixed_array)).mean())
-            next_layer_array.append(fixed_array)
-    print("the list of mse_array is {}".format(mse_array))
-    print("the most value in mse_array is {}".format(min(mse_array)))
-    print("the most value in mse_array index is << {}".format(mse_array.index(min(mse_array))+1))
-    print(np.array(float_array).shape)
-    return np.array(float_array) , np.array(next_layer_array[mse_array.index(min(mse_array))])
+                print(input_xt)
+            print("----------------ht---------------- {}".format(fixed_number))
+            if(input_ht_1.any()==0):
+                print("what_the_fuck")
+            else:
+                print(input_ht_1)
+            '''
+            #print("----------------ft---------------- {}".format(fixed_number))
+            #print(ht)
+            ct_1 = ct
+            np.savetxt("./"+fix_point_dir+"/lstm_"+str(file_number)+"_fixed_answer/"+str(fixed_number)+"_"+str(cell)+"_number.csv",ht,delimiter=",")
+            result_array.append(ht.reshape(units))
+        else:
+            print("please check your code why your going here !!!!!!")
+    #mse_array to find best fixed point location
+    #if(fixed_number!=0):
+    #    mse_array.append(np.square(np.array(float_array) - np.array(fixed_array)).mean())
+    #    next_layer_array.append(fixed_array)
+    #print("the list of mse_array is {}".format(mse_array))
+    #print("the most value in mse_array is {}".format(min(mse_array)))
+    #print("the most value in mse_array index is << {}".format(mse_array.index(min(mse_array))+1))
+    #print(np.array(float_array).shape)
+    #return np.array(float_array) , np.array(next_layer_array[mse_array.index(min(mse_array))])
+    return np.array(result_array)
             
