@@ -4,6 +4,7 @@ import csv
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+import string
 from ast import literal_eval
 #--------------choose your fix_pointer_dir-------------
 testing_file = "OCR_testing.csv"
@@ -374,21 +375,25 @@ def export_parser_design_csv(json_file_location,input_feature_map_location,weigh
 
         #----------------check if this node is the first node in there, we need to alignment to input_feature_map------------
         if(now_position==0):
-            total_layer_weight_list[now_position]['quant_batch_bias_beta'] = input_feature_shift
+            #total_layer_weight_list[now_position]['quant_batch_bias_beta'] = input_feature_shift
+            total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_answer_list[now_position]
         else:
             if(total_layer_weight_list[pre_position]['pooling_quant_finish']!=0):
-                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta'] - total_layer_weight_list[pre_position]['pooling_quant_finish']
+                #total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta'] - total_layer_weight_list[pre_position]['pooling_quant_finish']
+                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_answer_list[now_position]
             elif(total_layer_weight_list[pre_position]['quant_finish']!=0):
-                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta'] - total_layer_weight_list[pre_position]['quant_finish']
+                #total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta'] - total_layer_weight_list[pre_position]['quant_finish']
+                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_answer_list[now_position]
             else:
-                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta']
+                #total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_weight_list[pre_position]['quant_batch_bias_beta']
+                total_layer_weight_list[now_position]['quant_batch_bias_beta'] = total_layer_answer_list[now_position]
         
         #----------------check if this node is the last node --------------
         if(now_position != final_position):
             if('MaxPooling2D' in merge_list[now_position]):
-                total_layer_weight_list[now_position]['pooling_quant_finish'] = total_layer_weight_list[now_position]['quant_batch_bias_beta'] - total_layer_answer_list[now_position]
+                total_layer_weight_list[now_position]['pooling_quant_finish'] = total_layer_weight_list[now_position]['quant_batch_bias_beta'] - total_layer_answer_list[next_position]
             else:
-                total_layer_weight_list[now_position]['quant_finish'] = total_layer_weight_list[now_position]['quant_batch_bias_beta'] - total_layer_answer_list[now_position]
+                total_layer_weight_list[now_position]['quant_finish'] = total_layer_weight_list[now_position]['quant_batch_bias_beta'] - total_layer_answer_list[next_position]
             #print(total_layer_answer_list[now_position])
     #print(total_layer_weight_list)
     count_number = 0
